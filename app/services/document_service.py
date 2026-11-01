@@ -1,0 +1,103 @@
+import csv
+from pathlib import Path
+
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+from app.configs.settings import get_settings
+
+
+class DocumentService:
+    """Service for document processing"""
+
+    SUPPOORTED_FILE_EXTENSIONS = {".csv"}
+
+    TRANSCRIPT_CSV_FIELDNAMES = {
+        "id",
+        "start",
+        "end",
+        "url",
+        "channel_id",
+        "title",
+        "published",
+        "text",
+    }
+
+    def __init__(self, chunk_size: int | None = None, chunk_overlap: int | None = None):
+        settings = get_settings()
+        self.chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
+        self.chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
+            separators=["\n\n", "\n", " ", ""],
+            length_function=len,
+        )
+
+    def is_transcript_csv(self, file_path: Path) -> bool:
+        with file_path.open(newline="", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            if not reader.fieldnames:
+                return False
+
+            fields = set[str](reader.fieldnames)
+            return self.TRANSCRIPT_CSV_FIELDNAMES.issubset(fields)
+
+    def load_transcript_csv(self, file_path: Path, source_name: str) -> list[Document]:
+        """Load a transcript CSV file into a list of documents"""
+        documents: list[Document] = []
+
+        with file_path.open(newline="", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+
+            for row in reader:
+                text = row.get("text", "").strip()
+                if not text:
+                    continue
+
+                metadata = {
+                    "source": source_name,
+                    "id": row.get("id", ""),
+                    "start": row.get("start", ""),
+                    "end": row.get("end", ""),
+                    "url": row.get("url", ""),
+                    "channel_id": row.get("channel_id", ""),
+                    "title": row.get("title", ""),
+                    "published": row.get("published", ""),
+                }
+
+                documents.append(
+                    Document(
+                        page_content=text,
+                        metadata=metadata,
+                    )
+                )
+
+        return documents
+
+
+    def load_file(self, file_path: Path, source_name: str | None = None) -> list[Document]:
+        file_path = Path(file_path)
+        source = source_name or file_path.name 
+        ext = file_path.suffix.lower()
+        if ext not in self.SUPPOORTED_FILE_EXTENSIONS:
+            raise ValueError(f"Unsupported file extension: {ext}")
+
+        if ext == ".csv":
+            if self.is_transcript_csv(file_path):
+                docs = self.load_transcript_csv(file_path, source)
+            else:
+                raise ValueError(f"Unsupported CSV file: {file_path}")
+        else:
+            raise ValueError(f"Unsupported file extension: {ext}")
+        
+        return docs
+
+
+
+    def split_documents(self, documents: list[Document]) -> list[Document]:
+        return self.text_splitter.split_documents(documents)
+
+    def process_file(self, file_path: Path, source_name: str | None = None) -> list[Document]:
+        documents = self.load_file(file_path, source_name)
+        return self.split_documents(documents)
